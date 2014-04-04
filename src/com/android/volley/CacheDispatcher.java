@@ -45,6 +45,10 @@ public class CacheDispatcher extends Thread {
     /** For posting responses. */
     private final ResponseDelivery mDelivery;
 
+    /** For pausing and resuming. **/
+    private volatile boolean mPause = false;
+    private final Object mPauseLock = new Object();
+
     /** Used for telling us to die. */
     private volatile boolean mQuit = false;
 
@@ -67,12 +71,40 @@ public class CacheDispatcher extends Thread {
     }
 
     /**
+     * Resumes this dispatcher. Complements {@link #pause_()}.
+     */
+    public void resume_() {
+        synchronized(mPauseLock) {
+            mPause = false;
+            mPauseLock.notifyAll();
+        }
+    }
+
+    /**
+     * Pauses this dispatcher. No other heavy operations such as IO will be done
+     * until {@link #resume_()} or {@link #quit} are called.
+     */
+    public void pause_() {
+        synchronized(mPauseLock) {
+            mPause = true;
+        }
+    }
+
+    /**
      * Forces this dispatcher to quit immediately.  If any requests are still in
      * the queue, they are not guaranteed to be processed.
      */
     public void quit() {
         mQuit = true;
         interrupt();
+    }
+
+    private void pauseIfNeeded() throws InterruptedException {
+        synchronized(mPauseLock) {
+            if (mPause) {
+                mPauseLock.wait();
+            }
+        }
     }
 
     @Override
@@ -96,6 +128,9 @@ public class CacheDispatcher extends Thread {
                     continue;
                 }
 
+                // Check if we should be in a paused state before doing IO.
+                pauseIfNeeded();
+
                 // Attempt to retrieve this item from cache.
                 Cache.Entry entry = mCache.get(request.getCacheKey());
                 if (entry == null) {
@@ -113,11 +148,17 @@ public class CacheDispatcher extends Thread {
                     continue;
                 }
 
+                // Check if we should be in a paused state before parsing the data.
+                pauseIfNeeded();
+
                 // We have a cache hit; parse its data for delivery back to the request.
                 request.addMarker("cache-hit");
                 Response<?> response = request.parseNetworkResponse(
                         new NetworkResponse(entry.data, entry.responseHeaders));
                 request.addMarker("cache-hit-parsed");
+
+                // Check if we should be in a paused state before posting the response.
+                pauseIfNeeded();
 
                 if (!entry.refreshNeeded()) {
                     // Completely unexpired cache hit. Just deliver the response.

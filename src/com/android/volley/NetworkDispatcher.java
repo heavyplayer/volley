@@ -40,6 +40,9 @@ public class NetworkDispatcher extends Thread {
     private final Cache mCache;
     /** For posting responses and errors. */
     private final ResponseDelivery mDelivery;
+    /** For pausing and resuming. **/
+    private volatile boolean mPause = false;
+    private final Object mPauseLock = new Object();
     /** Used for telling us to die. */
     private volatile boolean mQuit = false;
 
@@ -62,12 +65,40 @@ public class NetworkDispatcher extends Thread {
     }
 
     /**
+     * Resumes this dispatcher. Complements {@link #pause_()}.
+     */
+    public void resume_() {
+        synchronized(mPauseLock) {
+            mPause = false;
+            mPauseLock.notifyAll();
+        }
+    }
+
+    /**
+     * Pauses this dispatcher. No other heavy operations such as IO will be done
+     * until {@link #resume_()} or {@link #quit} are called.
+     */
+    public void pause_() {
+        synchronized(mPauseLock) {
+            mPause = true;
+        }
+    }
+
+    /**
      * Forces this dispatcher to quit immediately.  If any requests are still in
      * the queue, they are not guaranteed to be processed.
      */
     public void quit() {
         mQuit = true;
         interrupt();
+    }
+
+    private void pauseIfNeeded() throws InterruptedException {
+        synchronized(mPauseLock) {
+            if (mPause) {
+                mPauseLock.wait();
+            }
+        }
     }
 
     @TargetApi(Build.VERSION_CODES.ICE_CREAM_SANDWICH)
@@ -106,6 +137,9 @@ public class NetworkDispatcher extends Thread {
 
                 addTrafficStatsTag(request);
 
+                // Before doing network IO, check if we should be in a paused state.
+                pauseIfNeeded();
+
                 // Perform the network request.
                 NetworkResponse networkResponse = mNetwork.performRequest(request);
                 request.addMarker("network-http-complete");
@@ -117,9 +151,15 @@ public class NetworkDispatcher extends Thread {
                     continue;
                 }
 
+                // Check if we should be in a paused state before parsing the data.
+                pauseIfNeeded();
+
                 // Parse the response here on the worker thread.
                 Response<?> response = request.parseNetworkResponse(networkResponse);
                 request.addMarker("network-parse-complete");
+
+                // Check if we should be in a paused state before caching the data.
+                pauseIfNeeded();
 
                 // Write to cache if applicable.
                 // TODO: Only update cache metadata instead of entire record for 304s.
@@ -127,6 +167,9 @@ public class NetworkDispatcher extends Thread {
                     mCache.put(request.getCacheKey(), response.cacheEntry);
                     request.addMarker("network-cache-written");
                 }
+
+                // Check if we should be in a paused state before posting the response.
+                pauseIfNeeded();
 
                 // Post the response back.
                 request.markDelivered();

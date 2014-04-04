@@ -125,7 +125,7 @@ public class RequestQueue {
     }
 
     /**
-     * Starts the dispatchers in this queue.
+     * Creates and starts the dispatchers in this queue.
      */
     public void start() {
         stop();  // Make sure any currently running dispatchers are stopped.
@@ -139,6 +139,34 @@ public class RequestQueue {
                     mCache, mDelivery);
             mDispatchers[i] = networkDispatcher;
             networkDispatcher.start();
+        }
+    }
+
+    /**
+     * Resumes the cache and network dispatchers.
+     */
+    public void resume() {
+        if (mCacheDispatcher != null) {
+            mCacheDispatcher.resume_();
+        }
+        for (int i = 0; i < mDispatchers.length; i++) {
+            if (mDispatchers[i] != null) {
+                mDispatchers[i].resume_();
+            }
+        }
+    }
+
+    /**
+     * Pauses the cache and network dispatchers.
+     */
+    public void pause() {
+        if (mCacheDispatcher != null) {
+            mCacheDispatcher.pause_();
+        }
+        for (int i = 0; i < mDispatchers.length; i++) {
+            if (mDispatchers[i] != null) {
+                mDispatchers[i].pause_();
+            }
         }
     }
 
